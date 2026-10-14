@@ -250,7 +250,15 @@ const MEASURE = `(() => {
         sample: tokens.slice(0, 6).map((t) => t.text + ' ' + t.color).join(' | '),
         bodyColor: colorOf(content),
         copyButton: q('.code-copy-btn').length,
-        langLabel: q('.cm-md-codeinfo').length
+        langLabel: q('.cm-md-codeinfo').length,
+        // #154：代码块的底色必须画在选区层下面。底色若压在上面，代码块里选中
+        // 看不到高亮，只有代码块两侧多出一条色带。
+        lineBg: (block[1] || block[0]) ? getComputedStyle(block[1] || block[0]).backgroundColor : null,
+        underBg: (block[1] || block[0]) ? getComputedStyle(block[1] || block[0], '::before').backgroundColor : null,
+        underZ: (block[1] || block[0]) ? getComputedStyle(block[1] || block[0], '::before').zIndex : null,
+        selLayerZ: document.querySelector('.cm-selectionLayer')
+          ? getComputedStyle(document.querySelector('.cm-selectionLayer')).zIndex
+          : null
       }
     })(),
     frontmatter: {
@@ -697,6 +705,12 @@ function main() {
         `token=${m.code.tokens} 颜色种类=${m.code.colors} 样例 ${m.code.sample}`)
       check('语言名压淡', m.code.langLabel >= 1, `语言名标注=${m.code.langLabel}`)
       check('代码块复制按钮', m.code.copyButton >= 1, `按钮数=${m.code.copyButton}`)
+      // #154：底色压在选区层上面，代码块里选中就看不到高亮。判据是层序：
+      // 行自己的底色必须透明，底色画在 z-index 更小（更靠下）的伪元素上。
+      check('代码块底色不压住选区（#154）',
+        m.code.lineBg === 'rgba(0, 0, 0, 0)' && m.code.underBg !== 'rgba(0, 0, 0, 0)' &&
+        Number(m.code.underZ) < Number(m.code.selLayerZ),
+        `行底色=${m.code.lineBg} 底层底色=${m.code.underBg} 底层 z=${m.code.underZ} 选区层 z=${m.code.selLayerZ}`)
       check('属性区阅读时不占位置', m.frontmatter.visible === 0,
         `属性区行数=${m.frontmatter.count} 有高度的=${m.frontmatter.visible}`)
       check('脚注渲染', m.footnote.refs >= 1, `refs=${m.footnote.refs} 露源码=${m.footnote.raw}`)
