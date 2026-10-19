@@ -27,7 +27,7 @@ import { forceParsing, syntaxTree } from '@codemirror/language'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 import katex from 'katex'
 import { scanMath, excludedRanges, frontmatterRange, type Excluded } from './math-scan'
-import { renderMermaid } from './mermaid-bridge'
+import { renderMermaid, attachDiagramZoom, detachDiagramZoom, isDiagramZoomed } from './mermaid-bridge'
 import { sanitizeHTML, cleanStyle } from './html-sanitize'
 import { footnoteDefinitions, footnoteNumbers, FOOTNOTE_REF_RE } from './footnotes'
 import { isChinese } from '../ui-language'
@@ -508,7 +508,7 @@ function collectTaskItems(state: EditorState, ranges: DecorationRange[], front: 
 /**
  * ```mermaid 代码块画成图。
  *
- * 渲染是异步的（mermaid 要在隐藏沙箱里跑），所以先放一个占位，画好了再原地替换。
+ * 渲染是异步的（引擎要懒加载），所以先放一个占位，画好了再原地替换。
  * 失败就把代码块原样留着——图是锦上添花，代码是用户写的东西。
  */
 class MermaidWidget extends WidgetType {
@@ -526,14 +526,17 @@ class MermaidWidget extends WidgetType {
     withSourceRange(wrap, this.from, this.to)
     wrap.textContent = isChinese() ? '图表渲染中…' : 'Rendering diagram…'
 
-    // **不指定**配色：交给 mermaid-bridge 按代码块底色的明暗挑（和它自己的注释一致）。
-    // 这里曾经按应用主题挑（`theme-dark` 才用深色），可 elegant 和 bear 是浅色主题
-    // 配深色代码块，于是深底上画出了浅色主题的图：连线 #333 落在 #2c2c2c 上，
-    // 边缘文字也几乎看不见（2026-09-26 用户报的「线条和背景色太接近」）。
+    // **不指定**配色：图是画在代码块底色上的，颜色由 `--pele-*` 那组变量从主题推出来
+    // （themes/editor-preview.css 的 `.cm-md-mermaid`），换主题不用重画。
+    // 这里曾经按应用主题挑明暗两套调色板，可 elegant 和 bear 是浅色主题配深色代码块，
+    // 于是深底上画出了浅色主题的图：连线 #333 落在 #2c2c2c 上，边缘文字几乎看不见
+    // （2026-09-26 用户报的「线条和背景色太接近」）。现在没有「挑一套」这回事了。
     void renderMermaid(this.code)
       .then((svg) => {
         wrap.innerHTML = svg
         wrap.classList.add('cm-md-mermaid-ready')
+        // 画不下的图（被 max-width 压窄了）才真出得来控件（#129）
+        attachDiagramZoom(wrap)
       })
       .catch(() => {
         // 画不出来就退回代码块，绝不吞掉用户的图
@@ -542,7 +545,35 @@ class MermaidWidget extends WidgetType {
       })
     return wrap
   }
+
+  destroy(dom: HTMLElement): void {
+    detachDiagramZoom(dom)
+  }
+
+  ignoreEvent(event: Event): boolean {
+    if (!POINTER_EVENTS.has(event.type)) return false
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    // 控件上的事不给编辑器管：否则 mousedown 一落，CM 就把光标放到块里，块退回源码、图当场
+    // 没了（另有一条「点渲染块跳源码」在 editor.ts，那边按控件和放大态各挡一道）。
+    if (target.closest('.pele-zoom')) return true
+    // 放大之后按住拖是在挪图，不是在选字
+    const host = target.closest<HTMLElement>('.cm-md-mermaid')
+    return !!host && isDiagramZoomed(host)
+  }
 }
+
+// 编辑器管的事件里，只有指针那一小拨需要抢：滚轮、滚动、键盘都照旧归编辑器。
+const POINTER_EVENTS = new Set([
+  'mousedown',
+  'mouseup',
+  'click',
+  'dblclick',
+  'pointerdown',
+  'pointerup',
+  'touchstart',
+  'touchend',
+])
 
 function collectMermaid(state: EditorState, ranges: DecorationRange[], front: Range | null): void {
   const text = state.doc.toString()
