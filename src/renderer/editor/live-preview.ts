@@ -1146,6 +1146,12 @@ function collectInline(state: EditorState, ranges: DecorationRange[], front: Ran
         case 'EmphasisMark':
         case 'StrikethroughMark':
         case 'CodeMark': {
+          const fence = node.node.parent
+          // 整块 Mermaid 替换与围栏空替换同起点时，增量更新会只留下空块。
+          if (node.name === 'CodeMark' && fence?.name === 'FencedCode' &&
+              !isBlockActive(state, fence.from, fence.to) &&
+              /^(`{3,}|~{3,})\s*mermaid\s*$/.test(state.doc.sliceString(fence.from, state.doc.lineAt(fence.from).to).trim()) &&
+              codeInsideFence(state, fence).trim()) break
           ranges.push({ from, to, deco: active ? MARK({ class: 'cm-md-marker' }) : hide(from, to) })
           break
         }

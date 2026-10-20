@@ -6,6 +6,7 @@
 // 图片不显示、脚注没预览、复制出来是源码。这个脚本把那些能力写成断言。
 //
 // 用法: npm run verify:features（先 npm run build）
+// 只验 Mermaid 点击往返：npm run verify:features -- --mermaid-only
 // 窗口放在屏幕外，不占用屏幕；一次启动跑完所有断言。
 //
 // 注意：页面侧表达式写在模板字符串里，反斜杠会被模板字符串吃掉一次，
@@ -43,6 +44,11 @@ function fixture() {
     '[链接文字](https://example.com/a) 和 [站内跳转](#一级标题)。',
     '',
     'NEEL 前半段的锚点。',
+    '',
+    // 交互用的图放在首屏，鼠标坐标无需依赖放大的虚拟视口。
+    '```mermaid',
+    'graph TD; A-->B;',
+    '```',
     '',
     '**00:00:17 开场**',
     '',
@@ -90,10 +96,6 @@ function fixture() {
     '$$',
     '\\int_0^1 x^2 dx',
     '$$',
-    '',
-    '```mermaid',
-    'graph TD; A-->B;',
-    '```',
     '',
     '脚注引用[^note]。',
     '',
@@ -480,6 +482,17 @@ function check(name, ok, detail) {
   checks.push({ name, ok, detail })
 }
 
+function reportChecks() {
+  const failed = checks.filter((c) => !c.ok)
+  for (const c of checks) {
+    console.log(`${c.ok ? '✓' : '✗'} ${c.name}${c.ok ? '' : `  ← ${c.detail}`}`)
+  }
+  console.log(failed.length
+    ? `\n✗ ${failed.length}/${checks.length} 条没通过`
+    : `\n✓ ${checks.length} 条全通过`)
+  if (failed.length) process.exitCode = 1
+}
+
 /** 点一下某一行（把光标放进去），返回它的坐标。 */
 async function clickLine(renderer, fragment) {
   const box = JSON.parse(await evaluate(renderer, `(() => {
@@ -518,6 +531,84 @@ async function pressKey(renderer, key, code, keyCode, modifiers = 0) {
   await sleep(200)
 }
 
+/** 图表退出源码后必须原地恢复，不能靠滚动重建视口才出现。 */
+async function checkMermaidRestoration(renderer) {
+  await renderer.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const waitForDiagram = async () => {
+    for (let i = 0; i < 40; i++) {
+      if (await evaluate(renderer, `Array.from(document.querySelectorAll('.cm-md-mermaid-ready svg')).some((svg) => {
+        const r = svg.getBoundingClientRect()
+        return r.width > 0 && r.height > 0
+      })`)) return true
+      await sleep(125)
+    }
+    return false
+  }
+  const appeared = await waitForDiagram()
+  check('Mermaid 点击前已渲染', appeared, `图表出现=${appeared}`)
+  if (!appeared) return
+
+  const clickDiagram = async () => {
+    const box = JSON.parse(await evaluate(renderer, `(() => {
+      const r = document.querySelector('.cm-md-mermaid').getBoundingClientRect()
+      return JSON.stringify({ x: Math.round(r.left + 12), y: Math.round(r.top + r.height / 2) })
+    })()`))
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await renderer.send('Input.dispatchMouseEvent', { type, ...box, button: 'left', clickCount: 1 })
+    }
+    // 源码展开后等 CM6 完成布局测量，再按行坐标点击，免得落在旧的图表位置上。
+    await sleep(200)
+  }
+  for (let round = 1; round <= 3; round++) {
+    await clickDiagram()
+    const revealed = await lineText(renderer, 'graph TD; A-->B;')
+    check(`Mermaid 第 ${round} 次点击进入源码`, revealed === 'graph TD; A-->B;', `源码=${JSON.stringify(revealed)}`)
+
+    // 只点击块外，期间不滚动、不切模式、不重载文档。
+    await clickLine(renderer, '普通段落')
+    const restored = await waitForDiagram()
+    check(`Mermaid 第 ${round} 次点走后无需滚动恢复`, restored, `图表恢复=${restored}`)
+    if (!restored) return
+  }
+
+  // 真正改节点，再进入源码撤销：既要能编辑，也要画出最新内容。
+  await clickDiagram()
+  await clickLine(renderer, 'graph TD; A-->B;')
+  await pressKey(renderer, 'End', 'End', 35)
+  await pressKey(renderer, 'ArrowLeft', 'ArrowLeft', 37)
+  await pressKey(renderer, 'ArrowLeft', 'ArrowLeft', 37, 8)
+  await renderer.send('Input.insertText', { text: 'C' })
+  const edited = await lineText(renderer, 'graph TD;')
+  await clickLine(renderer, '普通段落')
+  const editedReady = await waitForDiagram()
+  const hasLabel = async (label) => await evaluate(renderer,
+    `Array.from(document.querySelectorAll('.cm-md-mermaid svg text')).some((el) => el.textContent.trim() === ${JSON.stringify(label)})`)
+  check('Mermaid 编辑节点后渲染最新内容', edited === 'graph TD; A-->C;' && editedReady && await hasLabel('C'),
+    `源码=${JSON.stringify(edited)} 图表恢复=${editedReady}`)
+  if (!editedReady) return
+  await clickDiagram()
+  await pressKey(renderer, 'z', 'KeyZ', 90, 4)
+  await clickLine(renderer, '普通段落')
+  const undoneReady = await waitForDiagram()
+  check('Mermaid 撤销编辑后恢复原图', undoneReady && await hasLabel('B'), `图表恢复=${undoneReady}`)
+
+  // 图片/PDF 共用的整篇导出布局会重建装饰，返回编辑器后图表也必须还在。
+  await evaluate(renderer, 'window.__colamdPrintExport.enter()')
+  try {
+    const inPrint = await waitForDiagram()
+    check('Mermaid 图片/PDF 导出布局保留图表', inPrint && await hasLabel('B'), `导出布局中图表可见=${inPrint}`)
+  } finally {
+    await evaluate(renderer, 'window.__colamdPrintExport.exit()')
+  }
+  const afterExport = await waitForDiagram()
+  check('Mermaid 导出结束后仍显示图表', afterExport, `图表恢复=${afterExport}`)
+
+  await evaluate(renderer, SELECT_ALL)
+  const copied = JSON.parse(await evaluate(renderer, COPY_PROBE))
+  check('Mermaid 点击往返不改文档字节', copied.text === fixture(), `复制长度=${copied.text.length} 原文长度=${fixture().length}`)
+  await clickLine(renderer, '普通段落')
+}
+
 /** 语法速查：单独开一次窗口量一遍（它和夹具不是同一份文档）。 */
 async function checkCheatsheet() {
   const source = join(APP, 'resources', 'templates', 'cheatsheet.md')
@@ -529,6 +620,7 @@ async function checkCheatsheet() {
   try {
     const page = await waitTarget(port, (t) => t.type === 'page' && /index\.html/.test(t.url))
     const renderer = await connect(page.webSocketDebuggerUrl)
+    await renderer.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     await renderer.send('Emulation.setDeviceMetricsOverride', {
       width: 1200, height: 3600, deviceScaleFactor: 1, mobile: false
     })
@@ -675,6 +767,11 @@ function main() {
       // mermaid 是异步画的，多等一会儿
       await sleep(2500)
 
+      await checkMermaidRestoration(renderer)
+      if (process.argv.includes('--mermaid-only')) {
+        reportChecks()
+        return
+      }
       const m = JSON.parse(await evaluate(renderer, MEASURE))
 
       check('标题渲染', m.headings.h1 >= 1 && m.headings.h2 >= 1, `h1=${m.headings.h1} h2=${m.headings.h2}`)
@@ -1271,14 +1368,7 @@ function main() {
         afterReset.contentFont === beforeZoom.contentFont && afterReset.contentFamily === beforeZoom.contentFamily,
         `字号 ${afterZoom.contentFont} → ${afterReset.contentFont}（默认 ${beforeZoom.contentFont}），字体族 ${JSON.stringify(afterReset.contentFamily)}`)
 
-      const failed = checks.filter((c) => !c.ok)
-      for (const c of checks) {
-        console.log(`${c.ok ? '✓' : '✗'} ${c.name}${c.ok ? '' : `  ← ${c.detail}`}`)
-      }
-      console.log(failed.length
-        ? `\n✗ ${failed.length}/${checks.length} 条没通过`
-        : `\n✓ ${checks.length} 条全通过`)
-      if (failed.length) process.exitCode = 1
+      reportChecks()
     } finally {
       stopVerifyApp(udd)
       await sleep(300)
