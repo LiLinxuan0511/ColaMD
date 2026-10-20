@@ -1036,14 +1036,28 @@ function restoreScrollRatio(el: HTMLElement, ratio: number): void {
 
 function toggleSourceMode(): void {
   if (sourceModeActive) {
-    const ratio = scrollRatio(sourceEl())
+    const ta = sourceEl()
+    const ratio = scrollRatio(ta)
+    const { selectionStart, selectionEnd, selectionDirection } = ta
     // Source → WYSIWYG: re-parse the textarea content back into the editor
     exitSourceMode()
-    setMarkdownProgrammatically(sourceEl().value)
+    setMarkdownProgrammatically(ta.value)
+    // 源码与编辑器缓冲区是同一份字节，偏移直接对得上：光标回到源码里停的位置
+    const view = getEditorView()
+    if (view) {
+      const backward = selectionDirection === 'backward'
+      view.dispatch({ selection: { anchor: backward ? selectionEnd : selectionStart, head: backward ? selectionStart : selectionEnd } })
+    }
+    focusEditor()
     restoreScrollRatio(editorScroller(), ratio)
   } else {
+    const main = getEditorView()?.state.selection.main
     // WYSIWYG → Source: serialize the current editor content into the textarea
     enterSourceMode(getMarkdown(), scrollRatio(editorScroller()))
+    // 写入 value 会把光标挪到文末，焦点给了却停在那儿，一打字就跳到底
+    const ta = sourceEl()
+    if (main) ta.setSelectionRange(main.from, main.to, main.head < main.anchor ? 'backward' : 'forward')
+    ta.focus()
   }
   updateWordCount()
   scheduleOutlineUpdate()
@@ -1824,8 +1838,15 @@ async function init(): Promise<void> {
   // Cmd/Ctrl+F 在页面这一层也接一次：菜单的快捷键是主路径（macOS 上由菜单先接走），
   // 但菜单被隐藏或平台不转发快捷键时，这个兜底能保证打开的仍是**我们自己的**面板，
   // 而不是 CodeMirror 自带那块只有英文的（它已经从编辑器扩展里摘掉了）。
+  // Cmd/Ctrl+/ 同理接源码切换（CodeMirror 的注释绑定已摘掉）。页面 preventDefault 之后
+  // 菜单的同名快捷键不会再触发；切换不是幂等的，两边都触发就等于没按。
   document.addEventListener('keydown', (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return
+    if (event.key === '/') {
+      event.preventDefault()
+      toggleSourceMode()
+      return
+    }
     if (event.key.toLowerCase() !== 'f') return
     event.preventDefault()
     searchPanel.show()
