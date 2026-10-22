@@ -1,7 +1,8 @@
 import { createEditor, focusEditor, getMarkdown, getEditorView, getEditorScroller, onEditorJumpPhase, setMarkdown, setEditorEditable, getEditorState, restoreEditorState, applyMarkdownStyle, runFormatCommand, jumpToLine, jumpToHeading, setCleanExport, setDocumentFileUrl, type FormatCommandId } from './editor/editor'
 import { markdownForWord } from './editor/mermaid-export'
 import { withDiagramZoomPaused } from './editor/mermaid-bridge'
-import { jumpToSourceLine } from './editor/source-line'
+import { jumpToSourceLine, sourcePositionTop } from './editor/source-line'
+import { EditorView } from '@codemirror/view'
 import { documentHTMLFrom } from './editor/clean-html'
 import { isPresenting, startSlideshow, stopSlideshow } from './slideshow'
 import { enterPrintLayout, exitPrintLayout } from './slides-export'
@@ -275,6 +276,7 @@ interface DocumentTab {
   editorState: import('@codemirror/state').EditorState | null
   diskContent: string | null
   scrollTop: number
+  scrollSnapshot: ReturnType<EditorView['scrollSnapshot']> | null
 }
 
 const tabs: DocumentTab[] = []
@@ -325,6 +327,7 @@ function captureActiveTab(): void {
   } else {
     tab.editorState = getEditorState()
     tab.scrollTop = editorScroller().scrollTop
+    tab.scrollSnapshot = getEditorView()?.scrollSnapshot() ?? null
   }
 }
 
@@ -540,7 +543,8 @@ function ensureTab(): DocumentTab {
     lineEnding: '\n',
     editorState: null,
     diskContent: null,
-    scrollTop: 0
+    scrollTop: 0,
+    scrollSnapshot: null
   }
   tabs.push(tab)
   activeTabId = tab.id
@@ -563,7 +567,8 @@ async function openNewTab(): Promise<void> {
     lineEnding: '\n',
     editorState: null,
     diskContent: null,
-    scrollTop: 0
+    scrollTop: 0,
+    scrollSnapshot: null
   }
   tabs.push(tab)
   activeTabId = tab.id
@@ -656,12 +661,11 @@ async function activateTab(id: string): Promise<void> {
     updatePanelVisibility()
     void refreshSiblings()
     scheduleOutlineUpdate()
-    const restoreScroll = (): void => {
-      if (target.sourceMode) sourceEl().scrollTop = target.scrollTop
-      else editorScroller().scrollTop = target.scrollTop
-    }
-    restoreScroll()
-    requestAnimationFrame(restoreScroll)
+    const view = getEditorView()
+    if (target.sourceMode) sourceEl().scrollTop = target.scrollTop
+    else if (target.scrollSnapshot && view && view.state.doc === target.editorState?.doc) {
+      view.dispatch({ effects: target.scrollSnapshot })
+    } else editorScroller().scrollTop = target.scrollTop
     renderTabBar()
     if (changedOnDisk && target.dirty) raiseExternalConflict()
   } finally {
@@ -1028,36 +1032,65 @@ function scrollRatio(el: HTMLElement): number {
 }
 
 function restoreScrollRatio(el: HTMLElement, ratio: number): void {
-  requestAnimationFrame(() => {
-    const range = el.scrollHeight - el.clientHeight
-    el.scrollTop = Math.max(0, Math.min(range, range * ratio))
-  })
+  const range = el.scrollHeight - el.clientHeight
+  el.scrollTop = Math.max(0, Math.min(range, range * ratio))
+}
+
+function caretViewportFraction(top: number | null, height: number): number {
+  return top !== null && top >= 0 && top < height ? top / height : 1 / 3
+}
+
+function caretViewportOffset(fraction: number, height: number, lineHeight: number): number {
+  const margin = Math.min(lineHeight * 2, height / 3)
+  return Math.max(margin, Math.min(height - margin, fraction * height))
 }
 
 function toggleSourceMode(): void {
   if (sourceModeActive) {
     const ta = sourceEl()
-    const ratio = scrollRatio(ta)
     const { selectionStart, selectionEnd, selectionDirection } = ta
-    // Source → WYSIWYG: re-parse the textarea content back into the editor
+    const backward = selectionDirection === 'backward'
+    const head = backward ? selectionStart : selectionEnd
+    const fraction = caretViewportFraction(sourcePositionTop(ta, head) - ta.scrollTop, ta.clientHeight)
     exitSourceMode()
     setMarkdownProgrammatically(ta.value)
     // 源码与编辑器缓冲区是同一份字节，偏移直接对得上：光标回到源码里停的位置
     const view = getEditorView()
     if (view) {
-      const backward = selectionDirection === 'backward'
-      view.dispatch({ selection: { anchor: backward ? selectionEnd : selectionStart, head: backward ? selectionStart : selectionEnd } })
+      view.dispatch({
+        selection: { anchor: backward ? selectionEnd : selectionStart, head },
+        effects: EditorView.scrollIntoView(head, {
+          y: 'start',
+          yMargin: caretViewportOffset(fraction, view.scrollDOM.clientHeight, view.defaultLineHeight),
+        }),
+      })
+      const { doc, selection } = view.state
+      const tabId = activeTabId
+      // Let the newly visible viewport finish drawing before focus creates its
+      // native selection. Focus handlers dispatch, so leave CM's write phase.
+      view.requestMeasure({
+        key: toggleSourceMode,
+        read: () => null,
+        write: () => queueMicrotask(() => {
+          if (!sourceModeActive && activeTabId === tabId && view.state.doc === doc && view.state.selection.eq(selection)) view.focus()
+        }),
+      })
     }
-    focusEditor()
-    restoreScrollRatio(editorScroller(), ratio)
   } else {
-    const main = getEditorView()?.state.selection.main
-    // WYSIWYG → Source: serialize the current editor content into the textarea
-    enterSourceMode(getMarkdown(), scrollRatio(editorScroller()))
+    const view = getEditorView()
+    const main = view?.state.selection.main
+    const rect = main && view?.coordsAtPos(main.head, main.assoc || 1)
+    const scroller = editorScroller()
+    const fraction = caretViewportFraction(rect ? rect.top - scroller.getBoundingClientRect().top - scroller.clientTop : null, scroller.clientHeight)
+    enterSourceMode(getMarkdown())
     // 写入 value 会把光标挪到文末，焦点给了却停在那儿，一打字就跳到底
     const ta = sourceEl()
     if (main) ta.setSelectionRange(main.from, main.to, main.head < main.anchor ? 'backward' : 'forward')
-    ta.focus()
+    ta.focus({ preventScroll: true })
+    const head = main?.head ?? ta.selectionEnd
+    const style = getComputedStyle(ta)
+    const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize)
+    ta.scrollTop = Math.max(0, sourcePositionTop(ta, head) - caretViewportOffset(fraction, ta.clientHeight, lineHeight))
   }
   updateWordCount()
   scheduleOutlineUpdate()
