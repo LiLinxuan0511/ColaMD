@@ -198,11 +198,19 @@
 .cm-content .cm-md-li-5 { padding-left: 9em; }
 .cm-content .cm-md-li-6 { padding-left: 10.5em; }
 
-/* 无序列表的圆点。宽度与 `- ` 接近，避免换掉标记时行内文字抖动。 */
+/* 无序列表的圆点。宽度与 `- ` 接近，避免换掉标记时行内文字抖动。
+ *
+ * 圆点和序号是排版的一部分，用正文色，不跟 `#`、`>` 那些标记一起压灰（2026-10-25：
+ * 十二套主题量下来，圆点与序号全部是 --text-muted，整段列表看着发灰）。 */
 .cm-content .cm-md-li-bullet {
-  color: var(--text-muted);
+  color: var(--text-color);
   display: inline-block;
   width: 0.8em;
+}
+
+/* 有序列表的序号。行首那个数被替换成了重排后的编号，它是内容，不是标记。 */
+.cm-content .cm-md-li .cm-md-listmark {
+  color: var(--text-color);
 }
 
 /* ======= 代码块 ======= */

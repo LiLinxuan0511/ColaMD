@@ -233,7 +233,15 @@ const MEASURE = `(() => {
       nested: q('.cm-md-li-1').length,
       tasks: q('.cm-md-task').length,
       checked: q('.cm-md-task-checked').length,
-      ordered: text(lineOf('有序项一'))
+      ordered: text(lineOf('有序项一')),
+      // 列表的圆点与序号是排版的一部分，必须跟正文同色（不用 --text-muted 压灰）。
+      bodyColor: getComputedStyle(q('#editor .cm-content')[0]).color,
+      bulletColor: (() => { const b = q('.cm-md-li-bullet')[0]; return b ? getComputedStyle(b).color : null })(),
+      markColor: (() => {
+        const line = lines.find((l) => l.textContent.includes('有序项一'))
+        const mark = line && line.querySelector('.cm-md-listmark')
+        return mark ? getComputedStyle(mark).color : null
+      })()
     },
     table: {
       tables: q('.cm-md-table-widget').length,
@@ -1163,6 +1171,9 @@ function main() {
       check('本地图片渲染', m.image.imgs >= 1 && m.image.naturalWidth > 0,
         `img=${m.image.imgs} naturalWidth=${m.image.naturalWidth} src=${m.image.src}`)
       check('列表圆点', m.list.bullets >= 3, `bullets=${m.list.bullets}`)
+      check('列表的圆点和序号用正文色，不压灰',
+        m.list.bulletColor === m.list.bodyColor && m.list.markColor === m.list.bodyColor,
+        `圆点=${m.list.bulletColor} 序号=${m.list.markColor} 正文=${m.list.bodyColor}`)
       check('嵌套列表缩进', m.list.nested >= 1, `嵌套行=${m.list.nested}`)
       check('嵌套行只带自己那一层的类',
         (m.list.nestedClass ?? '').includes('cm-md-li-1') && !(m.list.nestedClass ?? '').includes('cm-md-li-0'),
