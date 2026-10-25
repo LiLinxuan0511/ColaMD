@@ -211,6 +211,9 @@ const MEASURE = `(() => {
       strong: q('.cm-md-strong').length,
       em: q('.cm-md-em').length,
       strike: q('.cm-md-strike').length,
+      // 加粗只用字重、删除线只用划线，都不换颜色（2026-10-25 定：文字颜色要少）
+      strongColor: (() => { const el = q('.cm-md-strong')[0]; return el ? getComputedStyle(el).color : null })(),
+      strikeColor: (() => { const el = q('.cm-md-strike')[0]; return el ? getComputedStyle(el).color : null })(),
       code: q('.cm-md-inlinecode').length,
       highlight: q('.cm-md-highlight').length,
       raw: has(lineOf('普通段落'), '**') || has(lineOf('普通段落'), '==') || has(lineOf('普通段落'), '~~')
@@ -272,7 +275,12 @@ const MEASURE = `(() => {
       ems: q('.cm-md-table-widget em').map((e) => e.textContent),
       cellTexts: q('.cm-md-table-widget td').map((td) => td.textContent)
     },
-    quote: { count: q('.cm-md-blockquote').length, raw: (text(lineOf('引用文字')) || '').startsWith('>') },
+    quote: {
+      count: q('.cm-md-blockquote').length,
+      raw: (text(lineOf('引用文字')) || '').startsWith('>'),
+      // 引用只用竖线和底色区分，文字仍是正文色：文字颜色越少越干净（2026-10-25 定）
+      textColor: textColorOf('引用文字')
+    },
     hr: { count: q('.cm-md-hr').length },
     math: { katex: q('.katex').length, block: q('.cm-md-math-block').length, error: q('.cm-md-math-error').length },
     mermaid: { ready: q('.cm-md-mermaid-ready').length, svg: q('.cm-md-mermaid svg').length, failed: q('.cm-md-mermaid-failed').length },
@@ -1210,6 +1218,11 @@ function main() {
           && cellTexts.some((t) => t.includes('snake_case_name')),
         `斜体=${JSON.stringify(ems)} 格子=${JSON.stringify(cellTexts.filter((t) => t.includes('_')).slice(0, 3))}`)
       check('引用渲染', m.quote.count >= 1 && m.quote.raw === false, `count=${m.quote.count} 露 >: ${m.quote.raw}`)
+      check('引用文字用正文色，不压灰', m.quote.textColor === m.list.bodyColor,
+        `引用=${m.quote.textColor} 正文=${m.list.bodyColor}`)
+      check('加粗与删除线不换颜色，跟正文同色',
+        m.inline.strongColor === m.list.bodyColor && m.inline.strikeColor === m.list.bodyColor,
+        `加粗=${m.inline.strongColor} 删除线=${m.inline.strikeColor} 正文=${m.list.bodyColor}`)
       check('分隔线渲染', m.hr.count >= 1, `hr=${m.hr.count}`)
       check('公式渲染', m.math.katex >= 2, `katex=${m.math.katex} block=${m.math.block} error=${m.math.error}`)
       check('Mermaid 渲染', m.mermaid.ready >= 1 && m.mermaid.svg >= 1,
