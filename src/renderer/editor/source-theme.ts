@@ -21,7 +21,10 @@ export const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.emphasis, fontStyle: 'italic' },
   { tag: t.strikethrough, textDecoration: 'line-through' },
   { tag: t.link, color: 'var(--link-color)' },
-  { tag: [t.processingInstruction, t.contentSeparator, t.list], color: 'var(--text-muted)' },
+  // 标记字符（`#`、`>`、`***`、围栏）压淡；**正文不许跟着淡**。
+  // `t.list` 曾经也在这条里，它盖住的是列表项里的文字，不只是 `-`、`1.` 那两个字符：
+  // 整个列表都发灰（2026-10-25 报的）。列表的圆点与序号由 editor-preview.css 单独管。
+  { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--text-muted)' },
 
   /* 代码块里的语法着色。解析器在 state.ts 里通过 `codeLanguages` 接进来（装了哪些
      语言就认哪些），这里只决定怎么画。

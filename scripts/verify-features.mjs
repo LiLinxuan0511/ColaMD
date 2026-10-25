@@ -188,6 +188,18 @@ const MEASURE = `(() => {
   const text = (el) => (el ? el.textContent : null)
   const has = (el, frag) => (el ? el.textContent.includes(frag) : null)
   const colorOf = (el) => (el ? getComputedStyle(el).color : null)
+  // 文字实际落在哪个元素上就量哪个：行元素一直报正文色，真正发灰的是行里被语法
+  // 高亮包起来的那层 span（2026-10-25 踩过：只量行元素，断言全绿，列表还是灰的）。
+  const textColorOf = (needle) => {
+    const line = lineOf(needle)
+    if (!line) return '缺'
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT)
+    let node
+    while ((node = walker.nextNode())) {
+      if (node.textContent.includes(needle)) return getComputedStyle(node.parentElement).color
+    }
+    return '没找到'
+  }
 
   return JSON.stringify({
     headings: {
@@ -234,8 +246,13 @@ const MEASURE = `(() => {
       tasks: q('.cm-md-task').length,
       checked: q('.cm-md-task-checked').length,
       ordered: text(lineOf('有序项一')),
-      // 列表的圆点与序号是排版的一部分，必须跟正文同色（不用 --text-muted 压灰）。
+      // 列表的文字、圆点、序号都必须是正文色。
+      // 量的是**文字所在的那个元素**，不是行元素：行元素一直报正文色，真正发灰的是
+      // 行里被语法高亮包起来的那层 span（2026-10-25 踩过：只量行元素，断言全绿，
+      // 屏幕上整段列表还是灰的）。
       bodyColor: getComputedStyle(q('#editor .cm-content')[0]).color,
+      ulTextColor: textColorOf('无序项一'),
+      olTextColor: textColorOf('有序项一'),
       bulletColor: (() => { const b = q('.cm-md-li-bullet')[0]; return b ? getComputedStyle(b).color : null })(),
       markColor: (() => {
         const line = lines.find((l) => l.textContent.includes('有序项一'))
@@ -1171,9 +1188,10 @@ function main() {
       check('本地图片渲染', m.image.imgs >= 1 && m.image.naturalWidth > 0,
         `img=${m.image.imgs} naturalWidth=${m.image.naturalWidth} src=${m.image.src}`)
       check('列表圆点', m.list.bullets >= 3, `bullets=${m.list.bullets}`)
-      check('列表的圆点和序号用正文色，不压灰',
-        m.list.bulletColor === m.list.bodyColor && m.list.markColor === m.list.bodyColor,
-        `圆点=${m.list.bulletColor} 序号=${m.list.markColor} 正文=${m.list.bodyColor}`)
+      check('列表的文字、圆点和序号都是正文色，不压灰',
+        m.list.ulTextColor === m.list.bodyColor && m.list.olTextColor === m.list.bodyColor &&
+          m.list.bulletColor === m.list.bodyColor && m.list.markColor === m.list.bodyColor,
+        `无序文字=${m.list.ulTextColor} 有序文字=${m.list.olTextColor} 圆点=${m.list.bulletColor} 序号=${m.list.markColor} 正文=${m.list.bodyColor}`)
       check('嵌套列表缩进', m.list.nested >= 1, `嵌套行=${m.list.nested}`)
       check('嵌套行只带自己那一层的类',
         (m.list.nestedClass ?? '').includes('cm-md-li-1') && !(m.list.nestedClass ?? '').includes('cm-md-li-0'),
