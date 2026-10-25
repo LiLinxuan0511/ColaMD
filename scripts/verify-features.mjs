@@ -1724,6 +1724,31 @@ function main() {
         backIndent === beforeIndent && !(backClass ?? '').includes('cm-md-li-1'),
         `退回后=${JSON.stringify(backIndent)} 类=${backClass}`)
 
+      // 缩进出来的子列表要**从 1 重新数**（#2026-10-25：Tab 缩进有序项，序号跟着父级
+      // 往下数，屏幕上先是 1. 2. 3. 然后突然接 3. 4.）。
+      // 用「起点为五/六」这一组：外层起始编号是 5，缩进再退回去正好原地往返，
+      // 不会把别的断言依赖的文本改掉。
+      // 缩进出来的子列表要**从 1 重新数**，而且必须真的缩成子列表（#2026-10-25：Tab 缩进有序项，
+      // 序号跟着父级往下数，屏幕上先是 1. 2. 3. 然后突然接 3. 4.）。两个原因叠在一起：
+      // 子列表的序号得从 1 起，而且 `1. ` 占三列，只插两个空格的子列表在 markdown 里
+      // 压根没成层（还是同一个列表的第二项）。
+      // 用「起点为五/六」这一组：外层起始编号是 5，缩进再退回去正好原地往返，
+      // 不会把别的断言依赖的文本改掉。
+      await clickLine(renderer, '起点为六')
+      const orderedBefore = await lineText(renderer, '起点为六')
+      await pressKey(renderer, 'Tab', 'Tab', 9)
+      const orderedNested = await lineText(renderer, '起点为六')
+      const orderedClass = await lineClass(renderer, '起点为六')
+      check('缩进进子列表时序号从 1 重新数',
+        orderedNested === '   1. 起点为六' && (orderedClass ?? '').includes('cm-md-li-1'),
+        `缩进前=${JSON.stringify(orderedBefore)} 缩进后=${JSON.stringify(orderedNested)}`)
+      await pressKey(renderer, 'Tab', 'Tab', 9, 8)
+      const orderedBack = await lineText(renderer, '起点为六')
+      await clickLine(renderer, '起点为五')
+      check('退回一级后序号跟着外层排好',
+        orderedBack === orderedBefore,
+        `退回后=${JSON.stringify(orderedBack)} 期望=${JSON.stringify(orderedBefore)}`)
+
       // 深色主题下选中文字不能被选区色盖住（2026-10-04 报的）。
       await clickLine(renderer, '待办未完成')
       await pressKey(renderer, 'Home', 'Home', 36)
